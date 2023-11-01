@@ -1,0 +1,14 @@
+.ipynb_checkpoints/
+*.rds
+*.pdf
+*.html
+.Rproj.user
+.Rprofile
+*.Rproj
+__pycache__
+*.pyc
+.DS_Store
+.Rhistory
+*.bz2
+pymc/
+*.out

@@ -1,0 +1,659 @@
+---
+title: "Methods to estimate cholera infection and attack rates"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    number_sections: true
+    df_print: paged
+---
+
+```{r echo = FALSE, warning = FALSE, include = FALSE}
+# Setup Environment
+knitr::opts_chunk$set(
+  echo = TRUE,
+  include = TRUE,
+  eval = TRUE,
+  warning = TRUE,
+  message = FALSE,
+  cache = F,
+  prompt = F,
+  comment = NA,
+  fig.width = 7,
+  fig.height = 4
+  )
+
+# Use english date format even with french or german locale.
+Sys.setenv(LANGUAGE="en")
+Sys.setlocale("LC_TIME", "en_GB.UTF-8")
+```
+
+# Goal
+
+Explore different methods to compute the attack rate of cholera from the serological and surveillance data from [Jackson et al. (2013)](https://doi.org/10.4269%2Fajtmh.13-0208).
+
+This includes methods to estimate the
+    - the clinical attack rate of cholera
+    - infection rate of cholera (i.e. including mild and asymptomatic infections)
+
+# Libraries and functions
+
+```{r}
+# install.packages(c("here", "dplyr", "tidyr", "ggplot2", "magrittr", "rstan", "readr"))
+
+library(here)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(magrittr)
+library(rstan)
+
+source(here("src/R/functions.R"))
+```
+
+# Data
+
+```{r}
+raw <- readr::read_csv(here("data/serology_clean.csv"))
+
+levels_raw_data <- c(1.414,10*2^seq(11),40560) #titer levels as given in data. 1.414 is an assigned value for lowest dilution. 40560 is an error and should be 40960
+
+#shape data for analysis
+data <- raw %>%
+  transmute(
+    age,
+    vibriocidalMAX_titer = factor(vibriocidalMAX_titer, levels = levels_raw_data, ordered = TRUE),
+    n
+  ) %>%
+  uncount(n)
+
+
+#assign 1 to titers not detectable
+#change wrong label for highest dilution
+levels(data$vibriocidalMAX_titer)[levels(data$vibriocidalMAX_titer)=="40560"] <- "40960"
+levels(data$vibriocidalMAX_titer)[levels(data$vibriocidalMAX_titer)=="1.414"] <- "1"
+
+#transform titers to log2 scale
+data %<>%
+  mutate(
+    vibriocidalMAX_titer_log2 = log2(as.integer(as.character(vibriocidalMAX_titer)))
+  )
+```
+
+# Attack rate estimates
+
+## Clinical attack rate
+
+- Total reported cases in Grande Saline commune between the start of the outbreak and 6 April 2011, divided by population.
+- Stratification by age group.
+- Cholera cases reported to the national surveillance system, as in Figure 2B of [Jackson et al. (2013)](https://doi.org/10.4269%2Fajtmh.13-0208).
+- Population from [IHSI 2009](https://www.humanitarianresponse.info/en/operations/haiti/document/projection-de-la-population-par-la-section-communale-de-2009-ihsi).
+- Age breakdown from the 2010 Haiti Demographics from [Demography of Haiti](https://en.wikipedia.org/wiki/Demographics_of_Haiti), based on IHSI, retreived on 10.03.2023
+
+```{r}
+cases <- 3880
+cases_u5 <- 848
+cases_2to4 <- round(cases_u5*0.7394) #adjusting for age distribution of cases according to patients in Gonaives CTC Nov-Dec 2010
+
+population <- 21131
+population_u5 <- round(population * 12.53/100)
+population_2to4 <- round(population_u5*3/5) #rough approximation given regular age distribution in under 5s
+
+attackRate_clinical <- cases/population
+attackRate_clinical_u5 <- cases_u5/population_u5
+attackRate_clinical_2to4 <- cases_2to4/population_2to4
+attackRate_clinical_o5 <- (cases - cases_u5)/(population - population_u5)
+attackRate_clinical_o2 <- (cases - (cases_u5-cases_2to4))/(population - (population_u5-population_2to4))
+```
+
+
+
+## Attack rate from self-reported episodes of cholera
+
+As reported in survey by [Jackson et al. (2013)](https://doi.org/10.4269%2Fajtmh.13-0208).
+
+- `chol` stands for self reported cholera
+- `wd` stands for self reported watery diarrhea
+
+```{r}
+ar_self_rep <- list()
+
+ar_self_rep$chol <- 466/(2074 + 466 + 82)
+ar_self_rep$wd <- 541/(1998 + 541 + 83)
+ar_self_rep$chol_2to4 <- 23/(97 + 23 + 4)
+ar_self_rep$wd_2to4 <- 31/(89 + 31 + 4)
+ar_self_rep$chol_geq5 <- 443/(1974 + 443 + 78)
+ar_self_rep$wd_geq5 <- 510/(1906 + 510 + 79)
+```
+
+
+## Threshold on vibriocidal titer
+
+In [Azman et al.](http://doi.org/10.1126/scitranslmed.aau6242) the authors report the best performing threshold to identify recent cholera infection from different
+serological markers, alongside with the sensitivity and specificity obtained by using this threshold.
+
+The best threshold depdens on the time period of interest within which cholera infection should be detected. Here we will use the thresholds for detecting
+cholera infection within the last 200 days, which corresponds best to our period of interest (about 6 months from the start of the outbreak to the serosurvey).
+
+Two datasets are analyzed, one of 1569 samples of a cohort in Bangladesh, and one from 38 healthy North American volunteers.
+Whereas the Bangladesh cohort has a much larger sample size, the high endemicity of cholera in Bangladesh could lead to biased results when applied to the case of Haiti,
+where the population was cholera naive before the outbreak.
+
+Using the data from North American volunteers, who are also cholera naive may thus be more apropriate.
+
+We apply the threshold of 320 used to identify recent cholera infection during the last 200 days in [Azman et al.](http://doi.org/10.1126/scitranslmed.aau6242) and adjust for the reported sensitivity and specificity,
+using values derived from the dataset of the Bangladesh cohort and the North American Volunteers.
+
+We use the [Rogan-Gladen estimator](https://doi.org/10.1093/oxfordjournals.aje.a112510) (function `correctForSensSpec()`) to adjust for sensitivity and specificity and truncate the result to the interval [0,1]. Uncertainty on sensitivity and
+specificity is propagated through the Rogan-Gladen estimator and the min and max values obtained is reported.
+
+### For the entire population
+
+```{r}
+thresh <- 320 #corresponds to best threshold to identify cholera during the last 200 days according to table S3 Azman et al.
+
+#Bangladesh snesitivity and specificity
+sens <- .824 #corresponding sensitivity
+spec <- .810 #corresponding specificity
+sens_ll <- .727 #confidence intervals
+spec_ll <- .702
+sens_ul <- .910
+spec_ul <- .906
+
+#north american volunteers
+sens_na <- .851 #corresponding sensitivity table S3 (american volunteers)
+spec_na <- .947 #corresponding specificity table S3 (american volunteers)
+
+#compute number of samples over 320
+overThresh <- data %>% filter(!is.na(vibriocidalMAX_titer)) %>% count(overThresh = (vibriocidalMAX_titer >= thresh))
+nResultPos <- overThresh$n[overThresh$overThresh][[1]]
+nResultNeg <- overThresh$n[!overThresh$overThresh][[1]]
+tot <- nResultPos + nResultNeg
+
+#correct for sensitivity and specificity
+corrected <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens, specificity = spec)
+corrected_ll_ll <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ll, specificity = spec_ll)
+corrected_ll_ul <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ll, specificity = spec_ul)
+corrected_ul_ll <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ul, specificity = spec_ll)
+corrected_ul_ul <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ul, specificity = spec_ul)
+
+corrected_ll <- min(corrected_ll_ll$realPositives, corrected_ll_ul$realPositives, corrected_ul_ll$realPositives, corrected_ul_ul$realPositives)
+corrected_ul <- max(corrected_ll_ll$realPositives, corrected_ll_ul$realPositives, corrected_ul_ll$realPositives, corrected_ul_ul$realPositives)
+
+#north americans. For North Americans Azman et al. don't report a CI.
+corrected_na <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_na, specificity = spec_na)
+
+
+# final AR
+attackRateSero <- corrected$realPositives/corrected$totalResults
+attackRateSero_ll <- corrected_ll/corrected$totalResults
+attackRateSero_ul <- corrected_ul/corrected$totalResults
+
+# north americans
+attackRateSero_na <- corrected_na$realPositives/corrected_na$totalResults
+```
+
+The naive attack rate using a threshold of 320 on vibriocidal Ogawa is `r 100*nResultPos/corrected$totalResults` %.
+
+Correcting for sensitivity and specificity reported by Azman et al., the attack rate becomes `r 100*attackRateSero` %
+using sensitivity and specificity from Bangladesh and `r 100*attackRateSero_na` % using sensitivity and specificity from North American volunteers.
+
+
+### For under 5s
+
+Under 5
+
+```{r}
+#compute number of samples over 320
+overThresh <- data %>% filter(!is.na(vibriocidalMAX_titer))  %>% filter(age == "2-4") %>% count(overThresh = (vibriocidalMAX_titer >= thresh))
+nResultPos <- overThresh$n[overThresh$overThresh][[1]]
+nResultNeg <- overThresh$n[!overThresh$overThresh][[1]]
+tot <- nResultPos + nResultNeg
+
+#correct for sensitivity and specificity
+corrected <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens, specificity = spec)
+corrected_ll_ll <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ll, specificity = spec_ll)
+corrected_ll_ul <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ll, specificity = spec_ul)
+corrected_ul_ll <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ul, specificity = spec_ll)
+corrected_ul_ul <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ul, specificity = spec_ul)
+
+corrected_ll <- min(corrected_ll_ll$realPositives, corrected_ll_ul$realPositives, corrected_ul_ll$realPositives, corrected_ul_ul$realPositives)
+corrected_ul <- max(corrected_ll_ll$realPositives, corrected_ll_ul$realPositives, corrected_ul_ll$realPositives, corrected_ul_ul$realPositives)
+
+#north americans
+corrected_na <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_na, specificity = spec_na)
+
+# final AR
+attackRateSero_u5 <- corrected$realPositives/corrected$totalResults
+attackRateSero_u5_ll <- corrected_ll/corrected$totalResults
+attackRateSero_u5_ul <- corrected_ul/corrected$totalResults
+
+
+#north americans
+attackRateSero_na_u5 <- corrected_na$realPositives/corrected_na$totalResults
+```
+
+### For 5 and over
+
+```{r}
+#compute number of samples over 320
+overThresh <- data %>% filter(!is.na(vibriocidalMAX_titer))  %>% filter(age == ">=5") %>% count(overThresh = (vibriocidalMAX_titer >= thresh))
+nResultPos <- overThresh$n[overThresh$overThresh][[1]]
+nResultNeg <- overThresh$n[!overThresh$overThresh][[1]]
+tot <- nResultPos + nResultNeg
+
+#correct for sensitivity and specificity
+corrected <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens, specificity = spec)
+corrected_ll_ll <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ll, specificity = spec_ll)
+corrected_ll_ul <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ll, specificity = spec_ul)
+corrected_ul_ll <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ul, specificity = spec_ll)
+corrected_ul_ul <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_ul, specificity = spec_ul)
+
+corrected_ll <- min(corrected_ll_ll$realPositives, corrected_ll_ul$realPositives, corrected_ul_ll$realPositives, corrected_ul_ul$realPositives)
+corrected_ul <- max(corrected_ll_ll$realPositives, corrected_ll_ul$realPositives, corrected_ul_ll$realPositives, corrected_ul_ul$realPositives)
+
+#north americans
+corrected_na <- correctForSensSpec(positiveResults = nResultPos, negativeResults = nResultNeg, sensitivity = sens_na, specificity = spec_na)
+
+# final AR
+attackRateSero_o5 <- corrected$realPositives/corrected$totalResults
+attackRateSero_o5_ll <- corrected_ll/corrected$totalResults
+attackRateSero_o5_ul <- corrected_ul/corrected$totalResults
+
+#north americans
+attackRateSero_na_o5 <- corrected_na$realPositives/corrected_na$totalResults
+```
+
+
+
+## Fitting a gaussian mixture model to the data to separate the two distributions:
+
+One way of separating the infected from the non-infected is to assume that the final vibriocidal
+log2-titer distribution is the combined log2-distribution for infected and non-infected and that both of them
+are gaussian.
+The model accounts for the interval censuring that arises from the fact that we don't know where exactly in the
+measured titer intervals the exact concentration lies (e.g between a titer value of 1/20 to 1/40).
+
+```{r}
+brks <- log2(c(1,10*2^seq(13)))
+ggplot(data, aes(vibriocidalMAX_titer_log2)) +
+  geom_histogram(aes(y=..density..), breaks = brks, closed = "left") +
+  scale_x_continuous(breaks = brks, labels = 2^brks, name = "titer", limits = c(0,NA),
+                     sec.axis = sec_axis(~., breaks = brks, name = ("log2(titer)")))
+```
+
+Following [Michael Betancourt's analysis](http://mc-stan.org/users/documentation/case-studies/identifying_mixture_models.html) (accessed on 25 October 2023) for the case where we
+have sufficient prior information to be able to separate the distributions.
+
+Load rstan package and set options
+```{r}
+options(mc.cores = parallel::detectCores()) #use in parallel with all cores
+rstan_options(auto_write = TRUE) #standard option to aviod recompiling if model code does not change
+```
+
+### wide neutral priors
+
+Prepare data and save for stan.
+Very wide and non-informative priors, equal for both distributions.
+The prior for the mixture parameter theta is set to a beta(1, 1) distribution.
+
+```{r}
+intervalBreaks <- log2(10*2^seq(12)) # log2 transform because we fit the normal distributions on a log scale
+y <- as.numeric(data$vibriocidalMAX_titer)[!is.na(data$vibriocidalMAX_titer)] #this is the index into the intervals above only!
+N <- length(y)
+K <- length(intervalBreaks)
+prior <- c(6,100,6,100,0,100,1,1) #mu_mu1, sigma_mu1, mu_mu2, sigma_mu2, mu_sigma, sigma_sigma, theta_1, theta_2
+nPriorPar <- length(prior)
+stan_rdump(c("N", "y", "intervalBreaks", "K", "prior", "nPriorPar"), file=here("src/Stan/mixtureDataStanVibriocidal.R"))
+```
+
+Run Stan and analyse posterior
+```{r message = FALSE, results = "hide"}
+input_data <- read_rdump(here("src/Stan/mixtureDataStanVibriocidal.R"))
+
+fit <- stan(file=here('src/Stan/censuredGaussianMixture2.stan'),
+            data=input_data,
+            chains=4,
+            iter = 5000,
+            refresh=1000,
+            cores = 4,
+            verbose = FALSE,
+            control = list(adapt_delta = 0.99), # to avoid divergent transitions
+            )
+```
+
+```{r}
+pars = c("mu","sigma","theta","lp__")
+print(fit, pars = pars)
+```
+
+```{r}
+traceplot(fit, inc_warmup = TRUE, pars = pars)
+```
+
+```{r fig.height = 10}
+pairs(fit, pars = pars)
+```
+
+```{r}
+posterior <- extract(fit)
+
+p1 <- ggplot(data, aes(vibriocidalMAX_titer_log2)) +
+  geom_histogram(aes(y=..density..), breaks = c(0,intervalBreaks, log2(2*40960)), closed = "left") +
+  scale_x_continuous(breaks = c(0,intervalBreaks, log2(2*40960)), labels = 2^c(0,intervalBreaks, log2(2*40960)), name = "titer", limits = c(-1,NA),
+                     sec.axis = sec_axis(~., breaks = c(0,intervalBreaks, log2(2*40960)), name = ("log2(titer)")))
+
+for (i in sample(length(posterior$mu[,1]),100)) {
+    p1 <- p1 +
+      stat_function(fun = dnorm_rescale, n = 101, args = list(scale = posterior$theta[i], mean = posterior$mu[i,1], sd = posterior$sigma[i,1], log = FALSE), color = "green", alpha = 0.2) +
+      stat_function(fun = dnorm_rescale, n = 101, args = list(scale = 1-posterior$theta[i], mean = posterior$mu[i,2], sd = posterior$sigma[i,2]), color = "blue", alpha = 0.2) +
+      stat_function(fun = dnorm_mixture, n = 101, args = list(scale1 = posterior$theta[i], mean1 = posterior$mu[i,1], sd1 = posterior$sigma[i,1], mean2 = posterior$mu[i,2], sd2 = posterior$sigma[i,2]), color = "red", alpha = 0.2)
+
+}
+
+print(p1)
+```
+
+
+In some runs, there is two modes with very close likelihood. This is NOT label switching, it's two real modes.
+
+There is little information about the lower of the two distributions.
+Thus we get a posterior with two modes, one where a lot of observations are assumed to be smaller than 1, one with most obs larger than 1.
+
+The mode with the wider lower distribution has a slightly higher likelihood.
+We can use stronger priors to favor the mode with the higher likelihood and get STAN to fit better.
+We also expect sigma2 to be much lower and of lower uncertainty than sigma 1, so we can try putting different priors on them.
+
+### adjusting priors
+
+```{r}
+intervalBreaks <- log2(10*2^seq(12)) # log2 transform because I want to fit the normal distributions on a log scale
+y <- as.numeric(data$vibriocidalMAX_titer)[!is.na(data$vibriocidalMAX_titer)] #this is the index into the intervals above only!
+N <- length(y)
+K <- length(intervalBreaks)
+prior <- c(4.5,5,8.5,5,0,20,1,1) #mu_mu1, sigma_mu1, mu_mu2, sigma_mu2, mu_sigma, sigma_sigma, theta_1, theta_2
+nPriorPar <- length(prior)
+stan_rdump(c("N", "y", "intervalBreaks", "K", "prior", "nPriorPar"), file=here("src/Stan/mixtureDataStanVibriocidal.R"))
+```
+
+Run Stan and analyse posterior
+```{r message = FALSE, results = "hide"}
+input_data <- read_rdump(here("src/Stan/mixtureDataStanVibriocidal.R"))
+
+fit <- stan(file=here('src/Stan/censuredGaussianMixture2.stan'),
+            data=input_data,
+            chains=4,
+            iter = 20000,
+            warmup = 16000,
+            refresh=1000,
+            cores = 4,
+            verbose = FALSE,
+            control = list(adapt_delta = 0.99), #avoid divergent transitions
+          )
+```
+
+
+```{r}
+pars = c("mu","sigma","theta","lp__")
+print(fit, pars = pars)
+```
+
+```{r}
+traceplot(fit, inc_warmup = TRUE, pars = pars)
+```
+
+```{r fig.height = 10}
+pairs(fit, pars = pars)
+```
+
+```{r}
+posterior <- extract(fit)
+
+p1 <- ggplot(data, aes(vibriocidalMAX_titer_log2)) +
+  geom_histogram(aes(y=..density..), breaks = c(0,intervalBreaks, log2(2*40960)), closed = "left") +
+  scale_x_continuous(breaks = c(0,intervalBreaks, log2(2*40960)), labels = 2^c(0,intervalBreaks, log2(2*40960)), name = "titer", limits = c(-1,NA),
+                     sec.axis = sec_axis(~., breaks = c(0,intervalBreaks, log2(2*40960)), name = ("log2(titer)")))
+
+for (i in sample(length(posterior$mu[,1]),100)) {
+    p1 <- p1 +
+      stat_function(fun = dnorm_rescale, n = 101, args = list(scale = posterior$theta[i], mean = posterior$mu[i,1], sd = posterior$sigma[i,1], log = FALSE), color = "green", alpha = 0.2) +
+      stat_function(fun = dnorm_rescale, n = 101, args = list(scale = 1-posterior$theta[i], mean = posterior$mu[i,2], sd = posterior$sigma[i,2]), color = "blue", alpha = 0.2) +
+      stat_function(fun = dnorm_mixture, n = 101, args = list(scale1 = posterior$theta[i], mean1 = posterior$mu[i,1], sd1 = posterior$sigma[i,1], mean2 = posterior$mu[i,2], sd2 = posterior$sigma[i,2]), color = "red", alpha = 0.2)
+
+}
+
+print(p1)
+```
+
+The attack rate corresponds to 1 - theta:
+
+```{r}
+ar_mixture <- 1 - quantile(posterior$theta, c(0.025, .5, .975))
+ar_mixture
+```
+
+
+
+### For >=5 only
+
+```{r}
+intervalBreaks <- log2(10*2^seq(12)) # log2 transform because I want to fit the normal distributions on a log scale
+y <- as.numeric(data$vibriocidalMAX_titer)[!is.na(data$vibriocidalMAX_titer) & !is.na(data$age) & data$age == ">=5"] #this is the index into the intervals above only!
+N <- length(y)
+K <- length(intervalBreaks)
+prior <- c(4.5,5,8.5,5,3,20,1,1) #mu_mu1, sigma_mu1, mu_mu2, sigma_mu2, mu_sigma, sigma_sigma, theta_1, theta_2
+nPriorPar <- length(prior)
+stan_rdump(c("N", "y", "intervalBreaks", "K", "prior", "nPriorPar"), file=here("src/Stan/mixtureDataStanVibriocidal.R"))
+```
+
+Run Stan and analyse posterior
+```{r message = FALSE, results = "hide"}
+input_data <- read_rdump(here("src/Stan/mixtureDataStanVibriocidal.R"))
+
+fit <- stan(file=here('src/Stan/censuredGaussianMixture2.stan'),
+            data=input_data,
+            chains=4,
+            iter = 20000,
+            warmup = 16000,
+            refresh=1000,
+            cores = 4,
+            verbose = FALSE,
+            control = list(adapt_delta = 0.99), #avoid divergent transitions
+            )
+```
+
+
+```{r}
+pars = c("mu","sigma","theta","lp__")
+print(fit, pars = pars)
+```
+
+```{r}
+traceplot(fit, inc_warmup = TRUE, pars = pars)
+```
+
+```{r fig.height = 10}
+pairs(fit, pars = pars)
+```
+
+```{r}
+posterior <- extract(fit)
+
+
+p1 <- ggplot(data, aes(vibriocidalMAX_titer_log2)) +
+  geom_histogram(aes(y=..density..), breaks = c(0,intervalBreaks, log2(2*40960)), closed = "left") +
+  scale_x_continuous(breaks = c(0,intervalBreaks, log2(2*40960)), labels = 2^c(0,intervalBreaks, log2(2*40960)), name = "titer", limits = c(-1,NA),
+                     sec.axis = sec_axis(~., breaks = c(0,intervalBreaks, log2(2*40960)), name = ("log2(titer)")))
+
+for (i in sample(length(posterior$mu[,1]),100)) {
+    p1 <- p1 +
+      stat_function(fun = dnorm_rescale, n = 101, args = list(scale = posterior$theta[i], mean = posterior$mu[i,1], sd = posterior$sigma[i,1], log = FALSE), color = "green", alpha = 0.2) +
+      stat_function(fun = dnorm_rescale, n = 101, args = list(scale = 1-posterior$theta[i], mean = posterior$mu[i,2], sd = posterior$sigma[i,2]), color = "blue", alpha = 0.2) +
+      stat_function(fun = dnorm_mixture, n = 101, args = list(scale1 = posterior$theta[i], mean1 = posterior$mu[i,1], sd1 = posterior$sigma[i,1], mean2 = posterior$mu[i,2], sd2 = posterior$sigma[i,2]), color = "red", alpha = 0.2)
+
+}
+
+print(p1)
+```
+
+The attack rate corresponds to 1 - theta:
+
+```{r}
+ar_mixture_o5 <- 1 - quantile(posterior$theta, c(0.025, .5, .975))
+ar_mixture_o5
+```
+
+## <5 only
+
+```{r}
+intervalBreaks <- log2(10*2^seq(12)) # log2 transform because I want to fit the normal distributions on a log scale
+y <- as.numeric(data$vibriocidalMAX_titer)[!is.na(data$vibriocidalMAX_titer) & !is.na(data$age) & data$age == "2-4"] #this is the index into the intervals above only!
+N <- length(y)
+K <- length(intervalBreaks)
+prior <- c(4.5,5,8.5,5,3,20,1,1) #mu_mu1, sigma_mu1, mu_mu2, sigma_mu2, mu_sigma, sigma_sigma, theta_1, theta_2
+PriorPar <- length(prior)
+stan_rdump(c("N", "y", "intervalBreaks", "K", "prior", "nPriorPar"), file=here("src/Stan/mixtureDataStanVibriocidal.R"))
+```
+
+Run Stan and analyse posterior
+```{r message = FALSE, results = "hide"}
+input_data <- read_rdump(here("src/Stan/mixtureDataStanVibriocidal.R"))
+
+# init <- list(mu1 = 1, mu2 = 8, sigma = c(1,1), theta = 0.5)
+
+fit <- stan(file=here('src/Stan/censuredGaussianMixture2.stan'),
+            data=input_data,
+            chains=4,
+            iter = 20000,
+            warmup = 16000,
+            refresh=1000,
+            cores = 4,
+            verbose = FALSE,
+            control = list(adapt_delta = 0.999999, max_treedepth = 15), # avoid divergent transitions
+            )
+```
+
+
+```{r}
+pars = c("mu","sigma","theta","lp__")
+print(fit, pars = pars)
+```
+
+```{r}
+traceplot(fit, inc_warmup = TRUE, pars = pars)
+```
+
+```{r fig.height = 10}
+pairs(fit, pars = pars)
+```
+
+```{r}
+posterior <- extract(fit)
+
+p1 <- ggplot(data, aes(vibriocidalMAX_titer_log2)) +
+  geom_histogram(aes(y=..density..), breaks = c(0,intervalBreaks, log2(2*40960)), closed = "left") +
+  scale_x_continuous(breaks = c(0,intervalBreaks, log2(2*40960)), labels = 2^c(0,intervalBreaks, log2(2*40960)), name = "titer", limits = c(-1,NA),
+                     sec.axis = sec_axis(~., breaks = c(0,intervalBreaks, log2(2*40960)), name = ("log2(titer)")))
+
+for (i in sample(length(posterior$mu[,1]),100)) {
+    p1 <- p1 +
+      stat_function(fun = dnorm_rescale, n = 101, args = list(scale = posterior$theta[i], mean = posterior$mu[i,1], sd = posterior$sigma[i,1], log = FALSE), color = "green", alpha = 0.2) +
+      stat_function(fun = dnorm_rescale, n = 101, args = list(scale = 1-posterior$theta[i], mean = posterior$mu[i,2], sd = posterior$sigma[i,2]), color = "blue", alpha = 0.2) +
+      stat_function(fun = dnorm_mixture, n = 101, args = list(scale1 = posterior$theta[i], mean1 = posterior$mu[i,1], sd1 = posterior$sigma[i,1], mean2 = posterior$mu[i,2], sd2 = posterior$sigma[i,2]), color = "red", alpha = 0.2)
+
+}
+
+print(p1)
+```
+
+The attack rate corresponds to 1 - theta:
+
+```{r}
+ar_mixture_u5 <- 1 - quantile(posterior$theta, c(0.025, .5, .975))
+ar_mixture_u5
+```
+
+
+# Results table & Figure
+
+```{r}
+attack_rate <- 
+  tribble(
+    ~type, ~ar_type, ~age_cat, ~central, ~low, ~high,
+    "clinical surveillance",                                               "clinical", "all", attackRate_clinical, NA, NA,
+    "clinical surveillance",                                               "clinical", "<5",  attackRate_clinical_u5, NA, NA,
+    "clinical surveillance",                                               "clinical", "2-4 years",  attackRate_clinical_2to4, NA, NA,
+    "clinical surveillance",                                               "clinical", ">=5 years", attackRate_clinical_o5, NA, NA,
+    "clinical surveillance",                                               "clinical", "All>=2 years", attackRate_clinical_o2, NA, NA,
+    "self reported cholera",                                               "clinical", "All>=2 years", ar_self_rep$chol, NA, NA,
+    "self reported watery diarrhea",                                       "clinical", "All>=2 years", ar_self_rep$wd, NA, NA,
+    "self reported cholera",                                               "clinical", "2-4 years", ar_self_rep$chol_2to4, NA, NA,
+    "self reported watery diarrhea",                                       "clinical", "2-4 years", ar_self_rep$wd_2to4, NA, NA,
+    "self reported cholera",                                               "clinical", ">=5 years", ar_self_rep$chol_geq5, NA, NA,
+    "self reported watery diarrhea",                                       "clinical", ">=5 years", ar_self_rep$wd_geq5, NA, NA,
+    "vibriocidal threshold\n(test preformance Bangladesh)",                "infection",  "All>=2 years", attackRateSero, attackRateSero_ll, attackRateSero_ul,
+    "vibriocidal threshold\n(test preformance Bangladesh)",                "infection",  "2-4 years", attackRateSero_u5, attackRateSero_u5_ll, attackRateSero_u5_ul,
+    "vibriocidal threshold\n(test preformance Bangladesh)",                "infection",  ">=5 years", attackRateSero_o5, attackRateSero_o5_ll, attackRateSero_o5_ul,
+    "vibriocidal threshold\n(test preformance North America)",             "infection",  "All>=2 years", attackRateSero_na, NA, NA,
+    "vibriocidal threshold\n(test preformance North America)",             "infection",  "2-4 years", attackRateSero_na_u5, NA, NA,
+    "vibriocidal threshold\n(test preformance North America)",             "infection",  ">=5 years", attackRateSero_na_o5, NA, NA,
+    "vibriocidal gaussian mixture",                                        "infection", "All>=2 years", ar_mixture[["50%"]], ar_mixture[["97.5%"]], ar_mixture[["2.5%"]],
+    "vibriocidal gaussian mixture",                                        "infection", "2-4 years", ar_mixture_u5[["50%"]], ar_mixture_u5[["97.5%"]], ar_mixture_u5[["2.5%"]],
+    "vibriocidal gaussian mixture",                                        "infection", ">=5 years", ar_mixture_o5[["50%"]], ar_mixture_o5[["97.5%"]], ar_mixture_o5[["2.5%"]]
+  )
+```
+
+```{r}
+attack_rate %>%
+  mutate(ci = paste0(round(10*100*central)/10, "% [", round(10*100*low)/10, " - ", round(10*100*high)/10, "]")) %>%
+  rmarkdown::paged_table()
+```
+
+
+```{r}
+attack_rate %>%
+  filter(type %in% c("clinical surveillance", "self reported cholera", "self reported watery diarrhea", "vibriocidal threshold\n(test preformance Bangladesh)", "vibriocidal threshold\n(test preformance North America)", "vibriocidal gaussian mixture"),
+      age_cat %in% c("All>=2 years", "2-4 years", ">=5 years")
+   ) %>%
+  mutate(ci = paste0(round(10*100*central)/10, "% [", round(10*100*low)/10, " - ", round(10*100*high)/10, "]")) %>%
+  select(type, age_cat, ci) %>%
+  pivot_wider(names_from = age_cat, values_from = ci) %>%
+  rmarkdown::paged_table()
+```
+
+```{r fig.width = 6, fig.height = 8}
+cols <- c("#708090", "#f08080")
+types <- c("clinical surveillance", "self reported cholera", "self reported watery diarrhea", "vibriocidal threshold\n(test preformance Bangladesh)", "vibriocidal threshold\n(test preformance North America)", "vibriocidal gaussian mixture")
+
+attack_rate %>%
+  filter(
+    type %in% types,
+    age_cat %in% c("All>=2 years", "2-4 years", ">=5 years"),
+    ) %>%
+  mutate(
+    type = factor(type, levels = types),
+    age_cat = factor(age_cat, levels = c("All>=2 years", "2-4 years", ">=5 years"))
+  ) %>%
+  ggplot(aes(y = type, x = 100*central, xmin = 100*low, xmax = 100*high, col = ar_type)) +
+  geom_pointrange(position = position_dodge2(width = .4), orientation = "y", size = .75) +
+  theme_bw() +
+  facet_grid(rows = vars(age_cat)) +
+  lims(x = c(0, 100)) +
+  labs(
+    x = "Attack rate (%)",
+    y = "Estimate"
+  ) +
+  scale_y_discrete(limits = rev(types)) +
+  scale_color_manual(values = cols) +
+  theme(legend.position = "none")
+```
+
+
+# R Environment
+
+Output environment and package versions used for reproducibility:
+
+```{r}
+sessionInfo()
+
+stan_version()
+```

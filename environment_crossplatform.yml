@@ -1,0 +1,19 @@
+name: haiti-sero_pymc4
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - scipy
+  - ipykernel
+  - pymc=4
+  - pyreadr
+  - jax
+  - numpyro
+  - click
+  - numpy
+  - python=3.11
+  - seaborn
+  - arviz
+  - openpyxl
+  - pandas
+prefix: /Users/chadi/anaconda3/envs/haiti-sero_pymc4
