@@ -6,7 +6,19 @@ __Inferring the proportion of undetected cholera infections from serological and
 
 by Flavio Finger, Joseph Lemaitre, Stanley Juin, Brendan Jackson, Sebastian Funk, Justin Lessler, Eric Mintz, Patrick Dely, Jacques Boncy and Andrew S Azman
 
-which is published in __JOURNAL NAME__, and can be accessed via __[XXX](XXX)__.
+which is currently under review. A preprint is available on MedrXiv: https://doi.org/10.1101/2023.11.01.23297461
+
+This code and data repository is archived on Zenodo under doi [10.5281/zenodo.10063169](https://zenodo.org/doi/10.5281/zenodo.10063169).
+
+## Citations
+
+If you use this work or want to reference it, please cite our article as:
+
+> _Inferring the proportion of undetected cholera infections from serological and clinical surveillance in an immunologically naive population_
+> Flavio Finger, Joseph Lemaitre, Stanley Juin, Brendan Jackson, Sebastian Funk, Justin Lessler, Eric Mintz, Patrick Dely, Jacques Boncy, Andrew Azman
+> medRxiv 2023.11.01.23297461;
+> doi: https://doi.org/10.1101/2023.11.01.23297461
+
 
 ## Data
 
