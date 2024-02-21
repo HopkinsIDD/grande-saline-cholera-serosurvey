@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH -p general
+#SBATCH --mem=80g
+#SBATCH -c 8
+#SBATCH -t 07-00:00:00
+#SBATCH --array=0-4
+
+N=${SLURM_ARRAY_TASK_ID}
+
+
+# 1 node (N) 1 task (n) to the general partition  for 7days, with this task needing 6 cpus
+module purge
+#./$CONDA_ROOT/etc/profile.d/conda.sh
+#module add anaconda
+#conda init
+#conda activate pymc4_env > test.out
+
+/nas/longleaf/home/chadi/.conda/envs/pymc4_env/bin/python -u calibration_fit-hist_lowbaseline.py ${SLURM_ARRAY_TASK_ID} > out_fit-hist-lowbaseTry2_${SLURM_ARRAY_TASK_ID}.out 2>&1
+
+

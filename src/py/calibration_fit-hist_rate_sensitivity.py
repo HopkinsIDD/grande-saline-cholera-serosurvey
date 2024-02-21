@@ -6,8 +6,10 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import arviz as az
 import pymc as pm
-print(f"Running on PyMC v{pm.__version__}")
+print(f"Running on PyMC3 v{pm.__version__}")
 print(f"Running on ArviZ v{az.__version__}")
+#import pytensor as pt
+#import pytensor.tensor as ptt
 import aesara.tensor as ptt
 import aesara as pt
 import matplotlib.dates as mdates
@@ -37,7 +39,7 @@ prefix = "cc-Fit-hist"
 dynamics_specs = ["mvDynamics"]  # "inDynamics",
 age_spec = ["U5", "adult", "all"]
 model_specs = [f"{a}-{d}" for a in age_spec for d in dynamics_specs]
-model_spec = model_specs[0] # hardcoded
+model_spec = model_specs[1] # hardcoded (0: children, 1: adult)
 model_id = f"{prefix}_{model_spec}_{spec_id}_{utils.get_git_revision_short_hash()}_{datetime.date.today()}"
 model_folder = f"/work/users/c/h/chadi/calib_Fit-hist/{model_id}"
 print(f">>> {spec_id} -> using model spec {model_spec} \n          >>> {model_specs}")
@@ -47,7 +49,7 @@ print(f">>> saving to {model_id}")
 titer_var = "titermax_log2" # var to model
 
 # Load data
-cases_df, serosurvey_df, ti, tf = utils.load_cases_and_serosurvey_clean()
+cases_df, serosurvey_df, ti, tf = utils.load_cases_and_serosurvey()
 age_spec = model_spec.split("-")[0]
 
 population = 21131 # population from IHSI, 2009
@@ -61,27 +63,27 @@ probcase2_4 = 0.7394 # probability of a case being 2_4 the cases with MSF data G
 def get_gt_data(age_spec):
     if age_spec == "all":
         n_population = population2_99
-        cases_gt = cases_df["cas_vus_lt5"] * probcase2_4 + cases_df["cas_vus_geq5"]
+        cases_gt = cases_df["cas_vus_5-"] * probcase2_4 + cases_df["cas_vus_5+"]
         serosurvey_gt = serosurvey_df
     elif age_spec == "U5":
         n_population = population2_4
-        cases_gt = cases_df["cas_vus_lt5"] * probcase2_4
-        serosurvey_gt = serosurvey_df[serosurvey_df["age"] == '2-4']
+        cases_gt = cases_df["cas_vus_5-"] * probcase2_4
+        serosurvey_gt = serosurvey_df[serosurvey_df["Age"] < 5]
     elif age_spec == "adult":
         n_population = population5_99
-        cases_gt = cases_df["cas_vus_geq5"]
-        serosurvey_gt = serosurvey_df[serosurvey_df["age"] == '>=5']
+        cases_gt = cases_df["cas_vus_5+"]
+        serosurvey_gt = serosurvey_df[serosurvey_df["Age"] >= 5]
 
     cases_arr = np.array(cases_gt)
-    n_sampled = int(serosurvey_gt["n"].sum())
+    n_sampled = len(serosurvey_gt)
     cases_total = np.sum(cases_arr) 
     n_days = len(cases_arr)
 
     # get all bins, even if zero for this age
     observed_count_index = serosurvey_df.groupby(by=titer_var)[titer_var].agg("count")
-    observed_count = serosurvey_gt[[titer_var, "n"]].groupby(titer_var).sum()
-    observed_count = observed_count.reindex(observed_count_index.index, fill_value=0)
-    observed_count = observed_count.astype(int)["n"] # important for pymc bug
+    observed_count = serosurvey_gt.groupby(by=titer_var)[titer_var].agg("count")
+    observed_count = observed_count.reindex_like(observed_count_index).fillna(0)
+    observed_count = observed_count.astype(int) # important for pymc bug
     
     return cases_gt, serosurvey_gt, n_population, cases_arr, n_sampled, cases_total, n_days, observed_count
 
@@ -118,8 +120,8 @@ if __name__=="__main__":
     else:
         pt.config.compute_test_value = 'off'
 
-    sampling_time_mean = np.round(np.average(serosurvey_gt['date_idx'], weights=serosurvey_gt['n'])) # np.round(serosurvey_gt["date_idx"].mean()) # mean sampling time.
-    sampling_time = np.array(np.repeat(serosurvey_gt['date_idx'], serosurvey_gt['n'])) # np.array(np.round(serosurvey_gt["date_idx"]))
+    sampling_time_mean = np.round(serosurvey_gt["date_idx"].mean()) # mean sampling time.
+    sampling_time = np.array(np.round(serosurvey_gt["date_idx"]))
     # cases_df[-10:] is zeros, so no need to model the increase before exponential titer decay.
     delay_report2peaktiter = 9 # days
 
