@@ -12,3 +12,6 @@ __pycache__
 *.bz2
 pymc/
 *.out
+renv/
+renv_old.lock
+data/serology_individual.csv
