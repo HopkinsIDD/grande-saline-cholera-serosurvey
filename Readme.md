@@ -106,6 +106,25 @@ Compare different attack rate and infection rate estimates:
 
 The output html file will be saved in the same folder.
 
+### Logistic regression
+
+The code for the additional logistic regression is written in R.
+
+#### Requirements & versions
+
+The analyses were performed using R version 4.3.1.
+
+Packages required can be installed with
+`install.packages(c("rmarkdown", "knitr", "here", "dplyr", "tidyr", "magrittr", "readr", "gtsummary"))`
+
+#### Running the code
+
+_Note that this analysis requires individual level data, which isn’t included in this repository to protect privacy of the survey participants. Interested researchers are invited to contact the authors of Jackson et al. (2013) [^1]._
+
+`rmarkdown::render("src/Rmd/logistic_regression.rmd")`
+
+The output html file will be saved in the same folder.
+
 
 ## References
 
