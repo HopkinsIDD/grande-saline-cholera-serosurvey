@@ -8,6 +8,8 @@ import arviz as az
 import pymc as pm
 print(f"Running on PyMC v{pm.__version__}")
 print(f"Running on ArviZ v{az.__version__}")
+#import pytensor as pt
+#import pytensor.tensor as ptt
 import aesara.tensor as ptt
 import aesara as pt
 import matplotlib.dates as mdates
@@ -37,7 +39,7 @@ prefix = "cc-Fit-hist"
 dynamics_specs = ["mvDynamics"]  # "inDynamics",
 age_spec = ["U5", "adult", "all"]
 model_specs = [f"{a}-{d}" for a in age_spec for d in dynamics_specs]
-model_spec = model_specs[0] # hardcoded
+model_spec = model_specs[1] # hardcoded (0: children, 1: adult), you'll need to change it yourself
 model_id = f"{prefix}_{model_spec}_{spec_id}_{utils.get_git_revision_short_hash()}_{datetime.date.today()}"
 model_folder = f"/work/users/c/h/chadi/calib_Fit-hist/{model_id}"
 print(f">>> {spec_id} -> using model spec {model_spec} \n          >>> {model_specs}")

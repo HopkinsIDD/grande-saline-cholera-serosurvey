@@ -39,13 +39,11 @@ def load_cases_and_serosurvey_clean(casefile = casefile, serofile = serofile):
     serosurvey_df["vibriocidalMAX_titer"] = serosurvey_df["vibriocidalMAX_titer"].replace(1.414,1.)
     serosurvey_df["vibriocidalMAX_titer"] = serosurvey_df["vibriocidalMAX_titer"].replace(40560,40960) 
     serosurvey_df["titermax_log2"] = np.log2(serosurvey_df["vibriocidalMAX_titer"])
-
     ti = cases_df["date"][0].to_pydatetime().date()           # first cases day
     tf = serosurvey_df["date"].max().to_pydatetime().date()   # last serosurvey day
 
     # take only cases before the last serosurvey day
     cases_df = cases_df.loc[cases_df["date"].dt.date <= tf]
-
 
     # Create a date idx column with a date index from 0 (ti) to n (tf)
     cases_df["date_idx"] = (cases_df["date"].dt.date - ti).apply(lambda x : x.days)
